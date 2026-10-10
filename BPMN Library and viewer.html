@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BPMN Library and viewer</title>
+<script>
+/* Тема применяется до отрисовки, чтобы не было мигания */
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('bpmn-viewer-theme'); } catch (e) {}
+  if (t !== 'dark' && t !== 'light')
+    t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<link rel="stylesheet" href="https://unpkg.com/bpmn-js@17.9.2/dist/assets/diagram-js.css">
+<style>
+  :root{
+    color-scheme:light;
+    --bg:#f3f5f9; --panel:#fff; --line:#dfe3ec; --text:#1d2433; --muted:#7a8398;
+    --accent:#2f6fed; --accent-d:#2559c2; --danger:#d23b3b; --top:#1f2a44;
+    --btn:#fff; --hover:#eef2fb; --row-hover:#f6f8fd; --row-active:#e6eeff; --row-line:#eef0f5;
+    --input:#fff; --bulk:#eef3ff; --toast:#1f2a44;
+    --banner-bg:#fff3cd; --banner-fg:#664d03; --banner-bd:#ffe69c;
+    --canvas-bg:#fff; --dot:#e3e7ef; --overlay:rgba(255,255,255,.92);
+    --cb:91%; --cf:25%; --cbd:80%; --ca:40%;
+  }
+  [data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#14181f; --panel:#1c222c; --line:#2d3646; --text:#e4e8f0; --muted:#8f9ab0;
+    --accent:#4a86ff; --accent-d:#3a6fdb; --danger:#ff7070; --top:#0f131a;
+    --btn:#262f3d; --hover:#2d384b; --row-hover:#232b38; --row-active:#26365a; --row-line:#262e3b;
+    --input:#111620; --bulk:#202b44; --toast:#3b4760;
+    --banner-bg:#3a3016; --banner-fg:#f1d98a; --banner-bd:#5c4a1a;
+    --canvas-bg:#10141b; --dot:#1f2632; --overlay:rgba(16,20,27,.92);
+    --cb:26%; --cf:85%; --cbd:36%; --ca:45%;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:var(--text);background:var(--bg);display:flex;flex-direction:column;overflow:hidden}
+  [hidden]{display:none!important}
+  button,input,select{font:inherit;color:inherit}
+
+  /* top bar */
+  .top{background:var(--top);color:#fff;display:flex;align-items:center;gap:10px;padding:7px 14px;flex-wrap:wrap}
+  .brand{font-weight:700;font-size:16px;margin-right:8px;white-space:nowrap}
+  .top .actions{display:flex;gap:6px;flex-wrap:wrap}
+  .top .spacer{flex:1}
+  .top .btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);color:#fff}
+  .top .btn:hover{background:rgba(255,255,255,.2)}
+  .top .btn.primary{background:var(--accent);border-color:var(--accent)}
+  .top .btn.primary:hover{background:var(--accent-d)}
+
+  /* iOS-переключатель темы */
+  .theme-switch{position:relative;display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
+  .theme-switch .ts-ico{font-size:16px;line-height:1;opacity:.55;transition:opacity .25s}
+  .theme-switch .ts-sun{opacity:1}
+  .theme-switch:has(input:checked) .ts-sun{opacity:.55}
+  .theme-switch:has(input:checked) .ts-moon{opacity:1}
+  .theme-switch input{position:absolute;opacity:0;width:0;height:0;margin:0}
+  .ts-track{position:relative;display:block;width:51px;height:31px;border-radius:31px;background:rgba(255,255,255,.3);transition:background-color .25s ease}
+  .ts-knob{position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:27px;background:#fff;
+    box-shadow:0 3px 8px rgba(0,0,0,.15),0 3px 1px rgba(0,0,0,.06);
+    transition:transform .25s cubic-bezier(.4,0,.2,1),width .25s cubic-bezier(.4,0,.2,1)}
+  .theme-switch input:checked + .ts-track{background:#34c759}
+  .theme-switch input:checked + .ts-track .ts-knob{transform:translateX(20px)}
+  .theme-switch:active .ts-knob{width:33px}
+  .theme-switch:active input:checked + .ts-track .ts-knob{transform:translateX(14px)}
+  .theme-switch input:focus-visible + .ts-track{outline:2px solid #fff;outline-offset:2px}
+
+  .btn{border:1px solid var(--line);background:var(--btn);border-radius:6px;padding:6px 11px;cursor:pointer;white-space:nowrap}
+  .btn:hover{background:var(--hover)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{background:var(--accent-d)}
+  .btn.danger{color:var(--danger)}
+  .btn.small{padding:2px 8px;font-size:12px}
+  .btn:disabled{opacity:.5;cursor:default}
+
+  .banner{background:var(--banner-bg);color:var(--banner-fg);padding:6px 14px;font-size:13px;border-bottom:1px solid var(--banner-bd)}
+
+  .layout{flex:1;display:flex;min-height:0}
+  .layout.nosidebar .side{display:none}
+
+  /* sidebar */
+  .side{width:360px;min-width:260px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+  .side-head{padding:10px;display:flex;flex-direction:column;gap:7px;border-bottom:1px solid var(--line)}
+  .side-head input[type=search]{width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:var(--input)}
+  .sortbar{display:flex;gap:6px}
+  .sortbar .seg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--line);background:var(--btn);border-radius:6px;padding:4px 6px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .sortbar .seg:hover{background:var(--hover)}
+  .sortbar .seg.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .tagbar{padding:8px 10px;display:flex;flex-wrap:wrap;gap:5px;border-bottom:1px solid var(--line);max-height:110px;overflow:auto}
+  .bulk{padding:7px 10px;background:var(--bulk);border-bottom:1px solid var(--line);display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:13px}
+  .list-head{padding:6px 12px;display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line)}
+  .list-head label{display:flex;gap:6px;align-items:center;cursor:pointer}
+  #list{list-style:none;margin:0;padding:0;overflow:auto;flex:1}
+  .item{display:flex;gap:8px;align-items:flex-start;padding:9px 10px 9px 12px;border-bottom:1px solid var(--row-line);cursor:pointer}
+  .item:hover{background:var(--row-hover)}
+  .item.active{background:var(--row-active);box-shadow:inset 3px 0 0 var(--accent)}
+  .item input{margin-top:3px}
+  .item .info{flex:1;min-width:0}
+  .item .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .sub{font-size:12px;color:var(--muted)}
+  .item .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+  .item .acts{display:flex;gap:2px;opacity:.35}
+  .item:hover .acts,.item.active .acts{opacity:1}
+  .icon{border:0;background:transparent;cursor:pointer;border-radius:4px;padding:2px 5px;font-size:14px}
+  .icon:hover{background:var(--hover)}
+  .none{padding:24px;text-align:center;color:var(--muted)}
+
+  .side-foot{padding:8px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);background:var(--panel)}
+  .side-foot .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:4px}
+  .side-foot .bar i{display:block;height:100%;background:#4cc38a;width:0}
+  .side-foot.warn .bar i{background:#f0a93b}
+  .side-foot.crit .bar i{background:#e05252}
+
+  .chip{--h:210;display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:10px;font-size:12px;
+    background:hsl(var(--h) 65% var(--cb));color:hsl(var(--h) 60% var(--cf));border:1px solid hsl(var(--h) 45% var(--cbd));cursor:default;user-select:none;white-space:nowrap}
+  .chip.click{cursor:pointer}
+  .chip.active{background:hsl(var(--h) 60% var(--ca));color:#fff;border-color:hsl(var(--h) 60% var(--ca))}
+  .chip b{font-weight:400;opacity:.65}
+  .chip .x{cursor:pointer;font-weight:700;opacity:.6}
+  .chip .x:hover{opacity:1}
+  .muted{color:var(--muted)}
+
+  /* main */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+  #empty{margin:auto;text-align:center;color:var(--muted);max-width:480px;padding:20px}
+  #empty h2{color:var(--text)}
+  #view{flex:1;display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+  .vhead{background:var(--panel);padding:6px 12px;border-bottom:1px solid var(--line)}
+  .vtitle{display:flex;align-items:center;gap:8px;min-width:0}
+  .vtitle h2{margin:0;font-size:17px;flex:0 1 auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vtags{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:5px;align-items:center;max-height:54px;overflow:auto}
+  .vdate{font-size:12px;color:var(--muted);white-space:nowrap}
+  .tools{background:var(--panel);padding:4px 12px;border-bottom:1px solid var(--line);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .tools .btn{padding:3px 10px}
+  .tools input[type=range]{vertical-align:middle}
+  #zoomRange{width:130px}
+  #panRange{flex:1;min-width:120px}
+  .tools .sep{width:1px;height:20px;background:var(--line);margin:0 4px}
+  .tools .help{width:20px;height:20px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font-size:12px;display:inline-flex;align-items:center;justify-content:center;cursor:help}
+  #zoomLabel{min-width:42px;text-align:right;font-variant-numeric:tabular-nums}
+  #canvasWrap{flex:1;position:relative;min-height:200px;background-color:var(--canvas-bg);
+    background-image:radial-gradient(var(--dot) 1px,transparent 1px);background-size:20px 20px}
+  #canvas{position:absolute;inset:0}
+  #canvas .djs-container{cursor:grab}
+  [data-theme="dark"] #canvas .djs-container > svg{filter:invert(.92) hue-rotate(180deg)}
+  #viewError{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:30px;text-align:center;color:var(--danger);background:var(--overlay);z-index:5}
+
+  /* dialogs */
+  dialog{border:0;border-radius:10px;padding:18px 20px;box-shadow:0 10px 40px rgba(0,0,0,.4);width:min(480px,92vw);background:var(--panel);color:var(--text)}
+  dialog::backdrop{background:rgba(10,14,25,.55)}
+  dialog h3{margin:0 0 10px}
+  dialog input[type=text]{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--input)}
+  .dlg-act{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+  .tagbox{display:flex;flex-wrap:wrap;gap:5px;min-height:28px;margin-bottom:8px;padding:6px;border:1px dashed var(--line);border-radius:6px}
+  .existing{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;max-height:120px;overflow:auto}
+  #reportBody{max-height:50vh;overflow:auto;font-size:13px}
+  #reportBody h4{margin:10px 0 4px}
+  #reportBody ul{margin:0;padding-left:18px}
+
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--toast);color:#fff;padding:9px 16px;border-radius:8px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+  #progress{position:fixed;right:20px;bottom:20px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;width:320px;z-index:100;box-shadow:0 6px 24px rgba(0,0,0,.25);font-size:13px}
+  #progress .bar{height:6px;background:var(--line);border-radius:3px;margin-top:8px;overflow:hidden}
+  #progress .bar i{display:block;height:100%;background:var(--accent);width:0}
+  #dropOverlay{position:fixed;inset:0;background:rgba(47,111,237,.18);border:4px dashed var(--accent);z-index:200;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:var(--accent);pointer-events:none}
+
+  @media(max-width:800px){
+    body{overflow:auto}
+    .layout{flex-direction:column}
+    .side{width:auto;max-height:50vh}
+    #canvasWrap{min-height:55vh}
+    .vtitle{flex-wrap:wrap}
+    .vtitle h2{max-width:100%}
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">📊 BPMN Library and viewer</div>
+  <div class="actions">
+    <button class="btn primary" id="btnImport" title="Выберите один или несколько файлов .bpmn (Ctrl/Shift или Ctrl+A в окне выбора)">＋ Добавить схемы</button>
+    <button class="btn" id="btnImportDb" title="Добавить схемы из JSON-файла базы">⬆ Импорт базы (JSON)</button>
+    <button class="btn" id="btnExportDb" title="Сохранить все схемы в один JSON-файл">⬇ Экспорт базы (JSON)</button>
+  </div>
+  <span class="spacer"></span>
+  <button class="btn" id="btnSide" title="Скрыть / показать список схем">☰ Список</button>
+  <label class="theme-switch" title="Светлая / тёмная тема">
+    <span class="ts-ico ts-sun">☀️</span>
+    <input type="checkbox" id="themeToggle" role="switch" aria-label="Тёмная тема">
+    <span class="ts-track"><span class="ts-knob"></span></span>
+    <span class="ts-ico ts-moon">🌙</span>
+  </label>
+</header>
+<div class="banner" id="memBanner" hidden>⚠ IndexedDB недоступна: схемы хранятся только в памяти вкладки и пропадут при её закрытии. Регулярно делайте экспорт базы.</div>
+
+<div class="layout" id="layout">
+  <aside class="side">
+    <div class="side-head">
+      <input type="search" id="search" placeholder="Поиск по названию или тегу…">
+      <div class="sortbar" id="sortbar">
+        <button class="seg" data-sort="name"></button>
+        <button class="seg" data-sort="date"></button>
+      </div>
+    </div>
+    <div class="tagbar" id="tagbar" hidden></div>
+    <div class="bulk" id="bulk" hidden>
+      <b id="bulkCount"></b>
+      <button class="btn small" id="bulkTag">🏷 Добавить тег</button>
+      <button class="btn small danger" id="bulkDel">🗑 Удалить</button>
+      <button class="btn small" id="bulkClear">Снять выбор</button>
+    </div>
+    <div class="list-head">
+      <label><input type="checkbox" id="chkAll"> Выбрать все</label>
+      <span id="count"></span>
+    </div>
+    <ul id="list"></ul>
+    <div class="side-foot" id="meter">
+      <div id="meterText"></div>
+      <div class="bar"><i id="meterBar"></i></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="empty">
+      <h2>Схема не выбрана</h2>
+      <p>Добавьте файлы <b>.bpmn</b> кнопкой «Добавить схемы» (можно выбрать сразу несколько) или просто перетащите их в окно браузера.
+         Чтобы загрузить чужую базу — «Импорт базы (JSON)». Затем выберите схему в списке слева.</p>
+    </div>
+
+    <section id="view" hidden>
+      <div class="vhead">
+        <div class="vtitle">
+          <h2 id="vTitle"></h2>
+          <button class="icon" id="vRename" title="Переименовать">✎</button>
+          <div class="vtags" id="vTags"></div>
+          <span class="vdate" id="vDate"></span>
+          <button class="btn" id="vFull" title="Развернуть схему на весь экран">⛶ На весь экран</button>
+          <button class="btn primary" id="vExport">⬇ Скачать .bpmn</button>
+        </div>
+      </div>
+      <div class="tools">
+        <button class="btn" id="zOut" title="Уменьшить">−</button>
+        <input type="range" id="zoomRange" min="5" max="400" step="5" value="100">
+        <button class="btn" id="zIn" title="Увеличить">＋</button>
+        <span id="zoomLabel">100%</span>
+        <button class="btn" id="z100">100%</button>
+        <button class="btn" id="zFit">По окну</button>
+        <button class="btn" id="zFitH" title="Вписать по высоте, начало схемы слева">По высоте</button>
+        <span class="sep"></span>
+        <button class="btn" id="pLeft" title="Влево">◀</button>
+        <input type="range" id="panRange" min="0" max="1000" value="0" title="Сдвиг по горизонтали">
+        <button class="btn" id="pRight" title="Вправо">▶</button>
+        <span class="help" title="Ctrl + колесо — масштаб · Shift + колесо или перетаскивание мышью — сдвиг">?</span>
+      </div>
+      <div id="canvasWrap">
+        <div id="canvas"></div>
+        <div id="viewError" hidden></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- hidden inputs -->
+<input type="file" id="fileBpmn" accept=".bpmn,.xml,.bpmn20.xml,application/xml,text/xml" multiple hidden>
+<input type="file" id="fileJson" accept=".json,application/json" multiple hidden>
+
+<!-- dialogs -->
+<dialog id="dlgText">
+  <form method="dialog">
+    <h3 id="dtTitle"></h3>
+    <input type="text" id="dtInput" autocomplete="off">
+    <div class="dlg-act">
+      <button type="button" class="btn" id="dtCancel">Отмена</button>
+      <button value="ok" class="btn primary">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgTags">
+  <form method="dialog">
+    <h3 id="tgTitle">Теги</h3>
+    <div class="muted" id="tgNote" style="margin-bottom:6px"></div>
+    <div class="tagbox" id="tgBox"></div>
+    <input type="text" id="tgInput" placeholder="Новый тег (Enter или запятая — добавить)" autocomplete="off">
+    <div class="muted" style="margin-top:8px;font-size:12px">Существующие теги (клик — добавить):</div>
+    <div class="existing" id="tgExisting"></div>
+    <div class="dlg-act">
+      <button type="button" class="btn" id="tgCancel">Отмена</button>
+      <button value="ok" class="btn primary" id="tgOk">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgReport">
+  <form method="dialog">
+    <h3>Результат импорта</h3>
+    <div id="reportBody"></div>
+    <div class="dlg-act"><button value="ok" class="btn primary">Закрыть</button></div>
+  </form>
+</dialog>
+
+<div id="progress" hidden><div id="progText"></div><div class="bar"><i id="progBar"></i></div></div>
+<div id="toast" hidden></div>
+<div id="dropOverlay" hidden>Отпустите файлы для импорта (.bpmn / .json)</div>
+
+<script>
+'use strict';
+/* ====================== Константы и утилиты ====================== */
+const MAX_BYTES = 1024 * 1024 * 1024;          // лимит 1 ГБ суммарно
+const JSON_FORMAT = 'bpmn-viewer-db';          // идентификатор формата JSON (не менять — совместимость со старыми экспортами)
+const SMALL_JSON_LIMIT = 150 * 1024 * 1024;    // больше — читаем JSON потоково
+const BPMN_NS = 'http://www.omg.org/spec/BPMN/20100524/MODEL';
+
+const $ = s => document.querySelector(s);
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k === 'text') e.textContent = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) if (kid != null) e.append(kid);
+  return e;
+}
+const prefs = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+const enc = new TextEncoder();
+const byteLen = s => enc.encode(s).length;
+function fmtSize(b) {
+  if (b < 1024) return b + ' Б';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' КБ';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' МБ';
+  return (b / 1073741824).toFixed(2) + ' ГБ';
+}
+const fmtDate = t => new Date(t).toLocaleString('ru-RU',
+  { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() :
+  'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
+const baseName = fn => fn.replace(/\.(bpmn20\.xml|bpmn|xml)$/i, '');
+const safeFile = n => (n.replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').trim() || 'diagram');
+function hashStr(str) { // cyrb53 + длина
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36) + '-' + str.length;
+}
+function normTags(arr) {
+  const seen = new Set(), out = [];
+  for (let t of arr || []) {
+    if (typeof t !== 'string') continue;
+    t = t.trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k); out.push(t);
+  }
+  return out;
+}
+function tagHue(t) {
+  let x = 7;
+  for (const c of t.toLowerCase()) x = (x * 31 + c.codePointAt(0)) >>> 0;
+  return x % 360;
+}
+function chip(t, { onClick, onRemove, count, active } = {}) {
+  const c = h('span', { class: 'chip' + (onClick ? ' click' : '') + (active ? ' active' : '') }, t);
+  c.style.setProperty('--h', tagHue(t));
+  if (count != null) c.append(h('b', { text: count }));
+  if (onClick) c.addEventListener('click', e => { e.stopPropagation(); onClick(); });
+  if (onRemove) c.append(h('span', { class: 'x', text: '×', onclick: e => { e.stopPropagation(); onRemove(); } }));
+  return c;
+}
+function download(blob, filename) {
+  const a = h('a', { href: URL.createObjectURL(blob), download: filename });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+let toastTimer;
+function toast(msg, ms = 3500) {
+  const t = $('#toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, ms);
+}
+const progress = {
+  show(text, frac) { $('#progress').hidden = false; $('#progText').textContent = text; $('#progBar').style.width = Math.round((frac || 0) * 100) + '%'; },
+  hide() { $('#progress').hidden = true; }
+};
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+/* ====================== Тема ====================== */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $('#themeToggle').checked = (t === 'dark');
+}
+$('#themeToggle').onchange = e => {
+  const t = e.target.checked ? 'dark' : 'light';
+  applyTheme(t); prefs.set('bpmn-viewer-theme', t);
+};
+applyTheme(document.documentElement.dataset.theme || 'light');
+
+/* ====================== Хранилище (IndexedDB + запасной вариант в памяти) ====================== */
+const txDone = tx => new Promise((res, rej) => {
+  tx.oncomplete = () => res();
+  tx.onerror = () => rej(tx.error);
+  tx.onabort = () => rej(tx.error || new Error('Транзакция отменена'));
+});
+const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+
+const Store = {
+  idb: null, mem: null,
+  async init() {
+    try {
+      if (!window.indexedDB) throw new Error('no idb');
+      this.idb = await new Promise((res, rej) => {
+        const r = indexedDB.open('bpmn-viewer-storage', 1);
+        r.onupgradeneeded = () => {
+          const d = r.result;
+          d.createObjectStore('meta', { keyPath: 'id' });
+          d.createObjectStore('xml', { keyPath: 'id' });
+        };
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+        r.onblocked = () => rej(new Error('blocked'));
+      });
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      return true;
+    } catch (e) {
+      this.idb = null; this.mem = { meta: new Map(), xml: new Map() };
+      return false;
+    }
+  },
+  allMeta() {
+    if (this.mem) return Promise.resolve([...this.mem.meta.values()]);
+    return reqP(this.idb.transaction('meta').objectStore('meta').getAll());
+  },
+  async getXml(id) {
+    if (this.mem) return this.mem.xml.get(id);
+    const r = await reqP(this.idb.transaction('xml').objectStore('xml').get(id));
+    return r && r.xml;
+  },
+  put(meta, xml) {
+    if (this.mem) { this.mem.meta.set(meta.id, { ...meta }); this.mem.xml.set(meta.id, xml); return Promise.resolve(); }
+    const tx = this.idb.transaction(['meta', 'xml'], 'readwrite');
+    tx.objectStore('meta').put(meta);
+    tx.objectStore('xml').put({ id: meta.id, xml });
+    return txDone(tx);
+  },
+  putMeta(meta) {
+    if (this.mem) { this.mem.meta.set(meta.id, { ...meta }); return Promise.resolve(); }
+    const tx = this.idb.transaction('meta', 'readwrite');
+    tx.objectStore('meta').put(meta);
+    return txDone(tx);
+  },
+  remove(ids) {
+    if (this.mem) { ids.forEach(i => { this.mem.meta.delete(i); this.mem.xml.delete(i); }); return Promise.resolve(); }
+    const tx = this.idb.transaction(['meta', 'xml'], 'readwrite');
+    ids.forEach(i => { tx.objectStore('meta').delete(i); tx.objectStore('xml').delete(i); });
+    return txDone(tx);
+  }
+};
+
+/* ====================== Состояние ====================== */
+const state = {
+  meta: new Map(),          // id -> {id,name,tags,size,hash,addedAt,updatedAt,originalName}
+  hashes: new Map(),        // hash -> id
+  total: 0,
+  selectedId: null,
+  checked: new Set(),
+  search: '',
+  sortKey: 'name',          // 'name' | 'date'
+  sortDir: 1,               // 1 — по возрастанию, -1 — по убыванию
+  tagFilter: new Set(),     // ключи в нижнем регистре
+  busy: false
+};
+
+/* ====================== Добавление схемы ====================== */
+function validateBpmn(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) return 'некорректный XML';
+  const root = doc.documentElement;
+  if (!root || root.localName !== 'definitions') return 'нет корневого элемента definitions — это не BPMN 2.0';
+  if (root.namespaceURI !== BPMN_NS) return 'неверное пространство имён (ожидается BPMN 2.0)';
+  return null;
+}
+
+async function addSchema({ id, name, xml, tags, originalName, addedAt, updatedAt }) {
+  const err = validateBpmn(xml);
+  if (err) return { status: 'invalid', reason: err };
+  if (id && state.meta.has(id)) return { status: 'duplicate', existing: state.meta.get(id).name };
+  const hash = hashStr(xml);
+  if (state.hashes.has(hash)) return { status: 'duplicate', existing: state.meta.get(state.hashes.get(hash)).name };
+  const size = byteLen(xml);
+  if (state.total + size > MAX_BYTES)
+    return { status: 'limit', reason: `превышен лимит ${fmtSize(MAX_BYTES)} (занято ${fmtSize(state.total)}, файл ${fmtSize(size)})` };
+  const now = Date.now();
+  const meta = {
+    id: id || uuid(), name: (name || 'Без названия').slice(0, 200), tags: normTags(tags),
+    size, hash, originalName: originalName || '',
+    addedAt: Number(addedAt) || now, updatedAt: Number(updatedAt) || now
+  };
+  try { await Store.put(meta, xml); }
+  catch (e) { return { status: 'error', reason: (e && e.name === 'QuotaExceededError') ? 'не хватает места в хранилище браузера' : String(e && e.message || e) }; }
+  state.meta.set(meta.id, meta);
+  state.hashes.set(hash, meta.id);
+  state.total += size;
+  return { status: 'added', id: meta.id };
+}
+
+/* ====================== Отчёт об импорте ====================== */
+const newReport = () => ({ added: 0, addedIds: [], dup: [], invalid: [], limit: [], errors: [] });
+function tally(rep, name, r) {
+  switch (r.status) {
+    case 'added': rep.added++; rep.addedIds.push(r.id); break;
+    case 'duplicate': rep.dup.push(`${name} — уже есть («${r.existing}»)`); break;
+    case 'invalid': rep.invalid.push(`${name} — ${r.reason}`); break;
+    case 'limit': rep.limit.push(`${name} — ${r.reason}`); break;
+    default: rep.errors.push(`${name} — ${r.reason || 'ошибка'}`);
+  }
+}
+function showReport(rep) {
+  const problems = rep.dup.length + rep.invalid.length + rep.limit.length + rep.errors.length;
+  if (!problems) { toast(rep.added ? `Добавлено схем: ${rep.added}` : 'Нечего импортировать'); return; }
+  const body = $('#reportBody'); body.replaceChildren(h('div', {}, h('b', { text: `Добавлено: ${rep.added}` })));
+  const sec = (title, arr) => {
+    if (!arr.length) return;
+    body.append(h('h4', { text: `${title} (${arr.length})` }),
+      h('ul', {}, arr.slice(0, 200).map(t => h('li', { text: t })),
+        arr.length > 200 ? h('li', { text: `… и ещё ${arr.length - 200}` }) : null));
+  };
+  sec('Пропущено как дубликаты', rep.dup);
+  sec('Некорректные файлы', rep.invalid);
+  sec('Не поместилось в лимит 1 ГБ', rep.limit);
+  sec('Ошибки', rep.errors);
+  $('#dlgReport').showModal();
+}
+
+/* ====================== Импорт файлов ====================== */
+async function importJsonItems(file, rep, onItem) {
+  if (file.size <= SMALL_JSON_LIMIT) {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data) && data.format !== JSON_FORMAT) throw new Error('это не файл базы BPMN Library and viewer');
+    const arr = Array.isArray(data) ? data : data.schemas;
+    if (!Array.isArray(arr)) throw new Error('в файле нет списка schemas');
+    for (const it of arr) await onItem(it);
+    return;
+  }
+  // Потоковое чтение: каждая схема лежит в файле на отдельной строке
+  const reader = file.stream().getReader();
+  const dec = new TextDecoder('utf-8');
+  let buf = '', first = true;
+  const line = async raw => {
+    let s = raw.trim();
+    if (!s) return;
+    if (first) {
+      first = false;
+      if (!s.includes('"' + JSON_FORMAT + '"')) throw new Error('это не файл базы BPMN Library and viewer');
+      return;
+    }
+    if (s.endsWith(',')) s = s.slice(0, -1);
+    if (s.startsWith('{"id"')) await onItem(JSON.parse(s));
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = dec.decode(value, { stream: true });
+    let start = 0, nl;
+    while ((nl = chunk.indexOf('\n', start)) >= 0) {
+      const l = buf + chunk.slice(start, nl); buf = ''; start = nl + 1;
+      await line(l);
+    }
+    buf += chunk.slice(start);
+  }
+  buf += dec.decode();
+  await line(buf);
+}
+
+async function handleFiles(fileList) {
+  if (state.busy) { toast('Дождитесь окончания текущей операции'); return; }
+  const files = [...fileList];                       // копируем сразу, пока список не очищен
+  const bpmn = files.filter(f => /\.(bpmn|xml)$/i.test(f.name));
+  const json = files.filter(f => /\.json$/i.test(f.name));
+  const rep = newReport();
+  files.filter(f => !bpmn.includes(f) && !json.includes(f))
+    .forEach(f => rep.invalid.push(`${f.name} — неподдерживаемый тип файла`));
+  if (!bpmn.length && !json.length && !rep.invalid.length) return;
+
+  state.busy = true;
+  try {
+    let n = 0; const total = bpmn.length + json.length;
+    for (const f of bpmn) {
+      progress.show(`Импорт ${++n} из ${total}: ${f.name}`, n / total);
+      try {
+        const xml = await f.text();
+        tally(rep, f.name, await addSchema({ name: baseName(f.name), originalName: f.name, xml }));
+      } catch (e) { rep.errors.push(`${f.name} — ${e.message || e}`); }
+      if (n % 20 === 0) { renderAll(); await tick(); }
+    }
+    for (const f of json) {
+      progress.show(`Импорт базы ${++n} из ${total}: ${f.name}`, n / total);
+      let cnt = 0;
+      try {
+        await importJsonItems(f, rep, async it => {
+          cnt++;
+          const label = `${f.name} → ${it && it.name || '#' + cnt}`;
+          if (!it || typeof it.xml !== 'string') { rep.invalid.push(`${label} — нет поля xml`); return; }
+          tally(rep, label, await addSchema({
+            id: typeof it.id === 'string' ? it.id : undefined,
+            name: typeof it.name === 'string' ? it.name : 'Без названия',
+            xml: it.xml, tags: it.tags, originalName: it.originalName,
+            addedAt: it.addedAt, updatedAt: it.updatedAt
+          }));
+          if (cnt % 20 === 0) { progress.show(`Импорт базы ${f.name}: обработано ${cnt}`, n / total); renderAll(); await tick(); }
+        });
+      } catch (e) { rep.errors.push(`${f.name} — ${e.message || e}`); }
+    }
+  } finally {
+    state.busy = false; progress.hide();
+  }
+  renderAll();
+  if (!state.selectedId && rep.addedIds.length) openSchema(rep.addedIds[0]);
+  showReport(rep);
+}
+
+/* ====================== Экспорт ====================== */
+async function exportDb() {
+  if (state.busy) { toast('Дождитесь окончания текущей операции'); return; }
+  if (!state.meta.size) { toast('База пуста'); return; }
+  state.busy = true;
+  try {
+    const metas = [...state.meta.values()].sort((a, b) => a.addedAt - b.addedAt);
+    const n = metas.length;
+    let parts = [`{"format":"${JSON_FORMAT}","version":1,"exportedAt":${JSON.stringify(new Date().toISOString())},"count":${n},"schemas":[\n`];
+    let pending = 0, blobs = [];
+    for (let i = 0; i < n; i++) {
+      const m = metas[i];
+      progress.show(`Экспорт ${i + 1} из ${n}`, (i + 1) / n);
+      const xml = await Store.getXml(m.id);
+      if (typeof xml !== 'string') continue;
+      // порядок ключей важен: "id" первым (используется при потоковом чтении)
+      const s = JSON.stringify({ id: m.id, name: m.name, tags: m.tags, originalName: m.originalName,
+        addedAt: m.addedAt, updatedAt: m.updatedAt, xml }) + (i < n - 1 ? ',\n' : '\n');
+      parts.push(s); pending += s.length;
+      if (pending > 32e6) { blobs.push(new Blob(parts)); parts = []; pending = 0; await tick(); }
+    }
+    parts.push(']}\n');
+    blobs.push(new Blob(parts));
+    const d = new Date(), p = x => String(x).padStart(2, '0');
+    download(new Blob(blobs, { type: 'application/json' }),
+      `bpmn-database-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.json`);
+    toast(`Экспортировано схем: ${n}`);
+  } catch (e) {
+    alert('Ошибка экспорта: ' + (e.message || e));
+  } finally { state.busy = false; progress.hide(); }
+}
+async function exportBpmn(id) {
+  const m = state.meta.get(id); if (!m) return;
+  const xml = await Store.getXml(id);
+  if (typeof xml !== 'string') { toast('Не удалось прочитать схему'); return; }
+  download(new Blob([xml], { type: 'application/xml' }), safeFile(m.name) + '.bpmn');
+}
+
+/* ====================== Диалоги ====================== */
+function askText({ title, value = '' }) {
+  return new Promise(res => {
+    const dlg = $('#dlgText');
+    $('#dtTitle').textContent = title; $('#dtInput').value = value;
+    $('#dtCancel').onclick = () => dlg.close('cancel');
+    dlg.returnValue = '';
+    dlg.onclose = () => res(dlg.returnValue === 'ok' ? $('#dtInput').value : null);
+    dlg.showModal(); $('#dtInput').select();
+  });
+}
+function allTags() {
+  const map = new Map();
+  for (const m of state.meta.values()) for (const t of m.tags) {
+    const k = t.toLowerCase();
+    if (!map.has(k)) map.set(k, { label: t, count: 0 });
+    map.get(k).count++;
+  }
+  return map;
+}
+function editTags({ title, initial = [], note = '' }) {
+  return new Promise(res => {
+    const dlg = $('#dlgTags'), box = $('#tgBox'), input = $('#tgInput');
+    let tags = normTags(initial);
+    $('#tgTitle').textContent = title; $('#tgNote').textContent = note; input.value = '';
+    const render = () => {
+      box.replaceChildren(...tags.map(t => chip(t, { onRemove: () => { tags = tags.filter(x => x !== t); render(); } })));
+      if (!tags.length) box.append(h('span', { class: 'muted', text: 'Тегов нет' }));
+      const have = new Set(tags.map(t => t.toLowerCase()));
+      const ex = [...allTags().entries()].filter(([k]) => !have.has(k)).sort((a, b) => a[1].label.localeCompare(b[1].label, 'ru'));
+      $('#tgExisting').replaceChildren(...ex.map(([, v]) => chip(v.label, { onClick: () => { tags = normTags([...tags, v.label]); render(); } })));
+      if (!ex.length) $('#tgExisting').append(h('span', { class: 'muted', text: '—' }));
+    };
+    const commit = () => { tags = normTags([...tags, ...input.value.split(',')]); input.value = ''; render(); };
+    input.onkeydown = e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); } };
+    $('#tgOk').onclick = commit;
+    $('#tgCancel').onclick = () => dlg.close('cancel');
+    dlg.returnValue = '';
+    dlg.onclose = () => res(dlg.returnValue === 'ok' ? tags : null);
+    render(); dlg.showModal(); input.focus();
+  });
+}
+
+/* ====================== Действия над схемами ====================== */
+async function renameSchema(id) {
+  const m = state.meta.get(id); if (!m) return;
+  const v = await askText({ title: 'Переименовать схему', value: m.name });
+  if (v == null || !v.trim()) return;
+  m.name = v.trim().slice(0, 200); m.updatedAt = Date.now();
+  await Store.putMeta(m); renderAll();
+}
+async function tagSchema(id) {
+  const m = state.meta.get(id); if (!m) return;
+  const t = await editTags({ title: 'Теги схемы', initial: m.tags, note: m.name });
+  if (t == null) return;
+  m.tags = t; m.updatedAt = Date.now();
+  await Store.putMeta(m); renderAll();
+}
+async function bulkTag() {
+  const ids = [...state.checked]; if (!ids.length) return;
+  const t = await editTags({ title: 'Добавить теги', initial: [], note: `Будут добавлены к выбранным схемам: ${ids.length}` });
+  if (!t || !t.length) return;
+  for (const id of ids) {
+    const m = state.meta.get(id); if (!m) continue;
+    m.tags = normTags([...m.tags, ...t]); m.updatedAt = Date.now();
+    await Store.putMeta(m);
+  }
+  renderAll(); toast('Теги добавлены');
+}
+async function deleteSchemas(ids) {
+  ids = ids.filter(i => state.meta.has(i)); if (!ids.length) return;
+  const msg = ids.length === 1 ? `Удалить схему «${state.meta.get(ids[0]).name}»?` : `Удалить выбранные схемы (${ids.length})?`;
+  if (!confirm(msg)) return;
+  await Store.remove(ids);
+  for (const id of ids) {
+    const m = state.meta.get(id);
+    state.total -= m.size;
+    if (state.hashes.get(m.hash) === id) state.hashes.delete(m.hash);
+    state.meta.delete(id); state.checked.delete(id);
+  }
+  if (state.selectedId && !state.meta.has(state.selectedId)) {
+    state.selectedId = null; openToken++;
+    if (viewer) { try { viewer.clear(); } catch (e) {} }
+  }
+  renderAll();
+}
+function toggleTagFilter(tag) {
+  const k = tag.toLowerCase();
+  state.tagFilter.has(k) ? state.tagFilter.delete(k) : state.tagFilter.add(k);
+  renderAll();
+}
+
+/* ====================== Отрисовка интерфейса ====================== */
+const cmpName = (x, y) => x.name.localeCompare(y.name, 'ru', { numeric: true, sensitivity: 'base' });
+
+function visibleItems() {
+  const q = state.search.trim().toLowerCase();
+  let a = [...state.meta.values()];
+  if (q) a = a.filter(m => m.name.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q)));
+  if (state.tagFilter.size) a = a.filter(m => {
+    const s = new Set(m.tags.map(t => t.toLowerCase()));
+    return [...state.tagFilter].every(t => s.has(t));
+  });
+  const d = state.sortDir;
+  return a.sort(state.sortKey === 'name'
+    ? (x, y) => (cmpName(x, y) || x.addedAt - y.addedAt) * d
+    : (x, y) => ((x.addedAt - y.addedAt) || cmpName(x, y)) * d);
+}
+
+function renderSort() {
+  document.querySelectorAll('#sortbar [data-sort]').forEach(b => {
+    const k = b.dataset.sort, on = state.sortKey === k, d = state.sortDir;
+    b.classList.toggle('on', on);
+    const dirText = k === 'name'
+      ? (d === 1 ? 'А → Я' : 'Я → А')
+      : (d === -1 ? 'новые сверху' : 'старые сверху');
+    const label = k === 'name' ? 'По алфавиту' : 'По дате добавления';
+    b.textContent = on ? `${label}: ${dirText}` : label;
+    b.title = (on ? 'Нажмите, чтобы изменить порядок. ' : 'Нажмите, чтобы сортировать. ') + label;
+  });
+}
+
+function renderStorage() {
+  const pct = state.total / MAX_BYTES * 100;
+  $('#meterText').textContent = `Схем: ${state.meta.size} · занято ${fmtSize(state.total)} из ${fmtSize(MAX_BYTES)} (${pct.toFixed(pct < 10 ? 1 : 0)}%)`;
+  $('#meterBar').style.width = Math.min(100, pct) + '%';
+  $('#meter').className = 'side-foot' + (pct > 90 ? ' crit' : pct > 70 ? ' warn' : '');
+}
+
+function renderTagbar() {
+  const tags = allTags();
+  for (const k of [...state.tagFilter]) if (!tags.has(k)) state.tagFilter.delete(k);
+  const bar = $('#tagbar');
+  bar.hidden = !tags.size;
+  const items = [...tags.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label, 'ru'));
+  bar.replaceChildren(...items.map(([k, v]) =>
+    chip(v.label, { count: v.count, active: state.tagFilter.has(k), onClick: () => toggleTagFilter(v.label) })));
+  if (state.tagFilter.size)
+    bar.append(h('button', { class: 'btn small', text: 'сбросить', onclick: () => { state.tagFilter.clear(); renderAll(); } }));
+}
+
+function renderList() {
+  const items = visibleItems();
+  const list = $('#list');
+  const frag = document.createDocumentFragment();
+  for (const m of items) {
+    frag.append(h('li', { class: 'item' + (m.id === state.selectedId ? ' active' : ''), 'data-id': m.id },
+      h('input', { type: 'checkbox', 'data-act': 'check', ...(state.checked.has(m.id) ? { checked: true } : {}) }),
+      h('div', { class: 'info' },
+        h('div', { class: 'name', 'data-act': 'name', title: m.name + '\n(двойной клик — переименовать)', text: m.name }),
+        h('div', { class: 'sub', title: 'Дата добавления', text: `📅 ${fmtDate(m.addedAt)} · ${fmtSize(m.size)}` }),
+        m.tags.length ? h('div', { class: 'tags' }, m.tags.map(t => chip(t, { onClick: () => toggleTagFilter(t) }))) : null),
+      h('div', { class: 'acts' },
+        h('button', { class: 'icon', 'data-act': 'rename', title: 'Переименовать', text: '✎' }),
+        h('button', { class: 'icon', 'data-act': 'tags', title: 'Теги', text: '🏷' }),
+        h('button', { class: 'icon', 'data-act': 'export', title: 'Скачать .bpmn', text: '⬇' }),
+        h('button', { class: 'icon', 'data-act': 'delete', title: 'Удалить', text: '🗑' }))));
+  }
+  list.replaceChildren(frag);
+  if (!items.length) list.append(h('li', { class: 'none', text: state.meta.size ? 'Ничего не найдено' : 'Список пуст' }));
+  $('#count').textContent = state.meta.size ? `Показано ${items.length} из ${state.meta.size}` : '';
+
+  const nChecked = items.filter(m => state.checked.has(m.id)).length;
+  const all = $('#chkAll');
+  all.checked = items.length > 0 && nChecked === items.length;
+  all.indeterminate = nChecked > 0 && nChecked < items.length;
+  $('#bulk').hidden = state.checked.size === 0;
+  $('#bulkCount').textContent = `Выбрано: ${state.checked.size}`;
+}
+
+function renderHeader() {
+  const m = state.meta.get(state.selectedId);
+  $('#empty').hidden = !!m; $('#view').hidden = !m;
+  if (!m) return;
+  const t = $('#vTitle');
+  t.textContent = m.name;
+  t.title = `${m.name}\n${fmtSize(m.size)} · добавлено ${fmtDate(m.addedAt)}` + (m.originalName ? `\nфайл: ${m.originalName}` : '');
+  $('#vDate').textContent = '📅 ' + fmtDate(m.addedAt);
+  $('#vTags').replaceChildren(
+    ...m.tags.map(tg => chip(tg, { onClick: () => toggleTagFilter(tg) })),
+    h('button', { class: 'btn small', text: m.tags.length ? '✎ теги' : '+ тег', onclick: () => tagSchema(m.id) }));
+}
+function renderAll() { renderStorage(); renderTagbar(); renderList(); renderHeader(); }
+
+/* ====================== Просмотрщик bpmn-js ====================== */
+let viewer = null, openToken = 0;
+const CDN = [
+  'https://unpkg.com/bpmn-js@17.9.2/dist/bpmn-navigated-viewer.production.min.js',
+  'https://cdn.jsdelivr.net/npm/bpmn-js@17/dist/bpmn-navigated-viewer.production.min.js',
+  './bpmn-navigated-viewer.production.min.js'      // локальная копия для работы без интернета
+];
+const loadScript = src => new Promise((res, rej) => {
+  const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error(src));
+  document.head.append(s);
+});
+const libReady = (async () => {
+  for (const src of CDN) {
+    try { await loadScript(src); if (window.BpmnJS) return true; } catch (e) {}
+  }
+  return false;
+})();
+
+function ensureViewer() {
+  if (viewer) return viewer;
+  viewer = new BpmnJS({ container: '#canvas' });
+  viewer.get('eventBus').on('canvas.viewbox.changed', updateControls);
+  return viewer;
+}
+const canvas = () => viewer.get('canvas');
+function showViewError(msg) { const e = $('#viewError'); e.hidden = !msg; e.textContent = msg || ''; }
+
+async function openSchema(id) {
+  if (!state.meta.has(id)) return;
+  const token = ++openToken;
+  state.selectedId = id;
+  renderAll();
+  showViewError('');
+  const xml = await Store.getXml(id);
+  if (token !== openToken) return;
+  if (!(await libReady)) {
+    showViewError('Не удалось загрузить библиотеку bpmn-js (нужен интернет при первом открытии, либо положите файл bpmn-navigated-viewer.production.min.js рядом с этой страницей). Управление базой при этом работает.');
+    return;
+  }
+  if (token !== openToken) return;
+  try {
+    ensureViewer();
+    await viewer.importXML(xml);
+    if (token !== openToken) return;
+    canvas().resized();
+    canvas().zoom('fit-viewport', 'auto');
+    updateControls();
+  } catch (e) {
+    if (token !== openToken) return;
+    try { viewer.clear(); } catch (_) {}
+    const noDi = /no diagram|BPMNDiagram/i.test(e.message || '');
+    showViewError('Не удалось отобразить схему: ' + (noDi ? 'в файле нет графической части (BPMNDiagram). ' : '') + (e.message || e));
+  }
+}
+
+const PAD = 40;
+function panBounds(vb) {
+  return { minX: vb.inner.x - PAD, maxX: vb.inner.x + vb.inner.width + PAD - vb.width };
+}
+function updateControls() {
+  if (!viewer || !state.selectedId || $('#view').hidden) return;
+  let vb; try { vb = canvas().viewbox(); } catch (e) { return; }
+  const pct = Math.round(vb.scale * 100);
+  $('#zoomLabel').textContent = pct + '%';
+  if (document.activeElement !== $('#zoomRange')) $('#zoomRange').value = pct;
+  const { minX, maxX } = panBounds(vb);
+  const pan = $('#panRange');
+  pan.disabled = !(maxX - minX >= 1);
+  if (document.activeElement !== pan) pan.value = pan.disabled ? 0 : Math.round((vb.x - minX) / (maxX - minX) * 1000);
+}
+function zoomBy(f) { if (!viewer) return; canvas().zoom(Math.min(4, Math.max(0.05, canvas().viewbox().scale * f))); }
+function fitHeight() {
+  if (!viewer) return;
+  const c = canvas(), vb = c.viewbox();
+  const innerH = Math.max(vb.inner.height, 1) + PAD * 2;
+  const s = Math.min(4, vb.outer.height / innerH);
+  c.viewbox({ x: vb.inner.x - PAD, y: vb.inner.y - PAD, width: vb.outer.width / s, height: innerH });
+}
+
+/* ====================== Привязка событий ====================== */
+$('#btnImport').onclick = () => $('#fileBpmn').click();
+$('#btnImportDb').onclick = () => $('#fileJson').click();
+$('#btnExportDb').onclick = exportDb;
+$('#fileBpmn').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
+$('#fileJson').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
+
+$('#btnSide').onclick = () => $('#layout').classList.toggle('nosidebar');
+
+$('#search').oninput = e => { state.search = e.target.value; renderList(); };
+$('#sortbar').addEventListener('click', e => {
+  const b = e.target.closest('[data-sort]'); if (!b) return;
+  const k = b.dataset.sort;
+  if (state.sortKey === k) state.sortDir *= -1;
+  else { state.sortKey = k; state.sortDir = k === 'name' ? 1 : -1; }
+  prefs.set('bpmn-viewer-sort', JSON.stringify({ k: state.sortKey, d: state.sortDir }));
+  renderSort(); renderList();
+});
+$('#chkAll').onchange = e => {
+  for (const m of visibleItems()) e.target.checked ? state.checked.add(m.id) : state.checked.delete(m.id);
+  renderList();
+};
+$('#bulkTag').onclick = bulkTag;
+$('#bulkDel').onclick = () => deleteSchemas([...state.checked]);
+$('#bulkClear').onclick = () => { state.checked.clear(); renderList(); };
+
+$('#list').addEventListener('click', e => {
+  const li = e.target.closest('.item'); if (!li) return;
+  const id = li.dataset.id, act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'check') {
+    e.target.checked ? state.checked.add(id) : state.checked.delete(id);
+    renderList(); return;
+  }
+  if (act === 'rename') return renameSchema(id);
+  if (act === 'tags') return tagSchema(id);
+  if (act === 'export') return exportBpmn(id);
+  if (act === 'delete') return deleteSchemas([id]);
+  if (id !== state.selectedId) openSchema(id);
+});
+$('#list').addEventListener('dblclick', e => {
+  if (e.target.closest('[data-act="name"]')) renameSchema(e.target.closest('.item').dataset.id);
+});
+
+$('#vRename').onclick = () => renameSchema(state.selectedId);
+$('#vExport').onclick = () => exportBpmn(state.selectedId);
+
+// Полноэкранный режим просмотра
+if (document.documentElement.requestFullscreen) {
+  $('#vFull').onclick = () => document.fullscreenElement ? document.exitFullscreen() : $('#view').requestFullscreen();
+  document.addEventListener('fullscreenchange', () => {
+    $('#vFull').textContent = document.fullscreenElement ? '⛶ Выйти' : '⛶ На весь экран';
+  });
+} else $('#vFull').hidden = true;
+
+$('#zIn').onclick = () => zoomBy(1.25);
+$('#zOut').onclick = () => zoomBy(1 / 1.25);
+$('#z100').onclick = () => viewer && canvas().zoom(1);
+$('#zFit').onclick = () => viewer && canvas().zoom('fit-viewport', 'auto');
+$('#zFitH').onclick = fitHeight;
+$('#zoomRange').oninput = e => viewer && canvas().zoom(e.target.value / 100);
+$('#panRange').oninput = e => {
+  if (!viewer) return;
+  const c = canvas(), vb = c.viewbox(), { minX, maxX } = panBounds(vb);
+  c.viewbox({ x: minX + (e.target.value / 1000) * (maxX - minX), y: vb.y, width: vb.width, height: vb.height });
+};
+$('#pLeft').onclick = () => viewer && (canvas().scroll({ dx: 250, dy: 0 }), setTimeout(updateControls, 350));
+$('#pRight').onclick = () => viewer && (canvas().scroll({ dx: -250, dy: 0 }), setTimeout(updateControls, 350));
+
+// Любое изменение размера области схемы (окно, скрытие списка, полный экран)
+new ResizeObserver(() => {
+  if (viewer && !$('#view').hidden) { try { canvas().resized(); } catch (e) {} updateControls(); }
+}).observe($('#canvasWrap'));
+
+// Drag & drop
+let dragDepth = 0;
+const hasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+addEventListener('dragenter', e => { if (hasFiles(e)) { dragDepth++; $('#dropOverlay').hidden = false; } });
+addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('#dropOverlay').hidden = true; });
+addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0; $('#dropOverlay').hidden = true;
+  if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+});
+
+/* ====================== Старт ====================== */
+(async function init() {
+  try {
+    const s = JSON.parse(prefs.get('bpmn-viewer-sort', 'null'));
+    if (s && (s.k === 'name' || s.k === 'date') && (s.d === 1 || s.d === -1)) { state.sortKey = s.k; state.sortDir = s.d; }
+  } catch (e) {}
+  renderSort();
+  const persistent = await Store.init();
+  $('#memBanner').hidden = persistent;
+  const metas = await Store.allMeta();
+  for (const m of metas) {
+    m.tags = normTags(m.tags);
+    state.meta.set(m.id, m); state.hashes.set(m.hash, m.id); state.total += m.size;
+  }
+  renderAll();
+})();
+</script>
+</body>
+</html>
